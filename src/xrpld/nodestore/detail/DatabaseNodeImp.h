@@ -76,7 +76,10 @@ public:
                 j);
         }
 
-        assert(backend_);
+        ASSERT(
+            backend_ != nullptr,
+            "ripple::NodeStore::DatabaseNodeImp::DatabaseNodeImp : non-null "
+            "backend");
     }
 
     ~DatabaseNodeImp()
@@ -106,7 +109,8 @@ public:
     store(NodeObjectType type, Blob&& data, uint256 const& hash, std::uint32_t)
         override;
 
-    bool isSameDB(std::uint32_t, std::uint32_t) override
+    bool
+    isSameDB(std::uint32_t, std::uint32_t) override
     {
         // only one database
         return true;
@@ -127,12 +131,6 @@ public:
         std::uint32_t ledgerSeq,
         std::function<void(std::shared_ptr<NodeObject> const&)>&& callback)
         override;
-
-    bool
-    storeLedger(std::shared_ptr<Ledger const> const& srcLedger) override
-    {
-        return Database::storeLedger(*srcLedger, backend_);
-    }
 
     void
     sweep() override;
@@ -155,12 +153,6 @@ private:
     for_each(std::function<void(std::shared_ptr<NodeObject>)> f) override
     {
         backend_->for_each(f);
-    }
-
-    std::optional<Backend::Counters<std::uint64_t>>
-    getCounters() const override
-    {
-        return backend_->counters();
     }
 };
 

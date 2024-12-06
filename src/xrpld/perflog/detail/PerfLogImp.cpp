@@ -20,7 +20,6 @@
 #include <xrpld/perflog/detail/PerfLogImp.h>
 
 #include <xrpld/core/JobTypes.h>
-#include <xrpld/nodestore/DatabaseShard.h>
 #include <xrpl/basics/BasicConfig.h>
 #include <xrpl/beast/core/CurrentThreadName.h>
 #include <xrpl/beast/utility/Journal.h>
@@ -55,7 +54,9 @@ PerfLogImp::Counters::Counters(
             if (!inserted)
             {
                 // Ensure that no other function populates this entry.
-                assert(false);
+                UNREACHABLE(
+                    "ripple::perf::PerfLogImp::Counters::Counters : failed to "
+                    "insert label");
             }
         }
     }
@@ -68,7 +69,9 @@ PerfLogImp::Counters::Counters(
             if (!inserted)
             {
                 // Ensure that no other function populates this entry.
-                assert(false);
+                UNREACHABLE(
+                    "ripple::perf::PerfLogImp::Counters::Counters : failed to "
+                    "insert job type");
             }
         }
     }
@@ -299,10 +302,7 @@ PerfLogImp::report()
     report[jss::hostid] = hostname_;
     report[jss::counters] = counters_.countersJson();
     report[jss::nodestore] = Json::objectValue;
-    if (app_.getShardStore())
-        app_.getShardStore()->getCountsJson(report[jss::nodestore]);
-    else
-        app_.getNodeStore().getCountsJson(report[jss::nodestore]);
+    app_.getNodeStore().getCountsJson(report[jss::nodestore]);
     report[jss::current_activities] = counters_.currentJson();
     app_.getOPs().stateAccounting(report);
 
@@ -330,7 +330,7 @@ PerfLogImp::rpcStart(std::string const& method, std::uint64_t const requestId)
     auto counter = counters_.rpc_.find(method);
     if (counter == counters_.rpc_.end())
     {
-        assert(false);
+        UNREACHABLE("ripple::perf::PerfLogImp::rpcStart : valid method input");
         return;
     }
 
@@ -352,7 +352,7 @@ PerfLogImp::rpcEnd(
     auto counter = counters_.rpc_.find(method);
     if (counter == counters_.rpc_.end())
     {
-        assert(false);
+        UNREACHABLE("ripple::perf::PerfLogImp::rpcEnd : valid method input");
         return;
     }
     steady_time_point startTime;
@@ -366,7 +366,8 @@ PerfLogImp::rpcEnd(
         }
         else
         {
-            assert(false);
+            UNREACHABLE(
+                "ripple::perf::PerfLogImp::rpcEnd : valid requestId input");
         }
     }
     std::lock_guard lock(counter->second.mutex);
@@ -384,7 +385,8 @@ PerfLogImp::jobQueue(JobType const type)
     auto counter = counters_.jq_.find(type);
     if (counter == counters_.jq_.end())
     {
-        assert(false);
+        UNREACHABLE(
+            "ripple::perf::PerfLogImp::jobQueue : valid job type input");
         return;
     }
     std::lock_guard lock(counter->second.mutex);
@@ -401,7 +403,8 @@ PerfLogImp::jobStart(
     auto counter = counters_.jq_.find(type);
     if (counter == counters_.jq_.end())
     {
-        assert(false);
+        UNREACHABLE(
+            "ripple::perf::PerfLogImp::jobStart : valid job type input");
         return;
     }
     {
@@ -420,7 +423,8 @@ PerfLogImp::jobFinish(JobType const type, microseconds dur, int instance)
     auto counter = counters_.jq_.find(type);
     if (counter == counters_.jq_.end())
     {
-        assert(false);
+        UNREACHABLE(
+            "ripple::perf::PerfLogImp::jobFinish : valid job type input");
         return;
     }
     {

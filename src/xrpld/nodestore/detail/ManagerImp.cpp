@@ -55,12 +55,6 @@ ManagerImp::make_Backend(
     auto factory{find(type)};
     if (!factory)
     {
-#ifndef RIPPLED_REPORTING
-        if (boost::iequals(type, "cassandra"))
-            Throw<std::runtime_error>(
-                "To use Cassandra as a nodestore, build rippled with "
-                "-Dreporting=ON");
-#endif
         missing_backend();
     }
 
@@ -97,7 +91,9 @@ ManagerImp::erase(Factory& factory)
         std::find_if(list_.begin(), list_.end(), [&factory](Factory* other) {
             return other == &factory;
         });
-    assert(iter != list_.end());
+    ASSERT(
+        iter != list_.end(),
+        "ripple::NodeStore::ManagerImp::erase : valid input");
     list_.erase(iter);
 }
 

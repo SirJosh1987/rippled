@@ -26,6 +26,7 @@
 #include <xrpl/json/json_value.h>
 #include <xrpl/protocol/ErrorCodes.h>
 #include <xrpl/protocol/Indexes.h>
+#include <xrpl/protocol/RPCErr.h>
 #include <xrpl/protocol/UintTypes.h>
 #include <xrpl/protocol/jss.h>
 #include <grpc/status.h>
@@ -53,9 +54,17 @@ doAccountInfo(RPC::JsonContext& context)
 
     std::string strIdent;
     if (params.isMember(jss::account))
+    {
+        if (!params[jss::account].isString())
+            return RPC::invalid_field_error(jss::account);
         strIdent = params[jss::account].asString();
+    }
     else if (params.isMember(jss::ident))
+    {
+        if (!params[jss::ident].isString())
+            return RPC::invalid_field_error(jss::ident);
         strIdent = params[jss::ident].asString();
+    }
     else
         return RPC::missing_field_error(jss::account);
 
@@ -205,7 +214,9 @@ doAccountInfo(RPC::JsonContext& context)
 
                     if (tx.seqProxy.isSeq())
                     {
-                        assert(prevSeqProxy < tx.seqProxy);
+                        ASSERT(
+                            prevSeqProxy < tx.seqProxy,
+                            "rpple::doAccountInfo : first sorted proxy");
                         prevSeqProxy = tx.seqProxy;
                         jvTx[jss::seq] = tx.seqProxy.value();
                         ++seqCount;
@@ -215,7 +226,9 @@ doAccountInfo(RPC::JsonContext& context)
                     }
                     else
                     {
-                        assert(prevSeqProxy < tx.seqProxy);
+                        ASSERT(
+                            prevSeqProxy < tx.seqProxy,
+                            "rpple::doAccountInfo : second sorted proxy");
                         prevSeqProxy = tx.seqProxy;
                         jvTx[jss::ticket] = tx.seqProxy.value();
                         ++ticketCount;

@@ -33,6 +33,7 @@
 #include <xrpl/basics/Resolver.h>
 #include <xrpl/basics/UnorderedContainers.h>
 #include <xrpl/basics/chrono.h>
+#include <xrpl/beast/utility/instrumentation.h>
 #include <xrpl/resource/ResourceManager.h>
 #include <xrpl/server/Handoff.h>
 #include <boost/asio/basic_waitable_timer.hpp>
@@ -41,7 +42,6 @@
 #include <boost/asio/strand.hpp>
 #include <boost/container/flat_map.hpp>
 #include <atomic>
-#include <cassert>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -118,12 +118,6 @@ private:
     std::atomic<uint64_t> jqTransOverflow_{0};
     std::atomic<uint64_t> peerDisconnects_{0};
     std::atomic<uint64_t> peerDisconnectsCharges_{0};
-
-    // 'cs' = crawl shards
-    std::mutex csMutex_;
-    std::condition_variable csCV_;
-    // Peer IDs expecting to receive a last link notification
-    std::set<std::uint32_t> csIDs_;
 
     reduce_relay::Slots<UptimeClock> slots_;
 
@@ -392,16 +386,6 @@ public:
         return setup_.networkID;
     }
 
-    Json::Value
-    crawlShards(bool includePublicKey, std::uint32_t relays) override;
-
-    /** Called when the reply from the last peer in a peer chain is received.
-
-        @param id peer id that received the shard info.
-    */
-    void
-    endOfPeerChain(std::uint32_t id);
-
     /** Updates message count for validator/peer. Sends TMSquelch if the number
      * of messages for N peers reaches threshold T. A message is counted
      * if a peer receives the message for the first time and if
@@ -616,7 +600,9 @@ private:
     {
         auto counts = m_traffic.getCounts();
         std::lock_guard lock(m_statsMutex);
-        assert(counts.size() == m_stats.trafficGauges.size());
+        ASSERT(
+            counts.size() == m_stats.trafficGauges.size(),
+            "ripple::OverlayImpl::collect_metrics : counts size do match");
 
         for (std::size_t i = 0; i < counts.size(); ++i)
         {

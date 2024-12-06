@@ -10,8 +10,6 @@ option(assert "Enables asserts, even in release builds" OFF)
 
 option(xrpld "Build xrpld" ON)
 
-option(reporting "Build rippled with reporting mode enabled" OFF)
-
 option(tests "Build tests" ON)
 
 option(unity "Creates a build using UNITY support in cmake. This is the default" ON)
@@ -19,6 +17,9 @@ if(unity)
   if(NOT is_ci)
     set(CMAKE_UNITY_BUILD_BATCH_SIZE 15 CACHE STRING "")
   endif()
+endif()
+if(is_clang AND is_linux)
+  option(voidstar "Enable Antithesis instrumentation." OFF)
 endif()
 if(is_gcc OR is_clang)
   option(coverage "Generates coverage info." OFF)

@@ -18,7 +18,7 @@
 //==============================================================================
 
 #include <xrpld/app/tx/detail/NFTokenUtils.h>
-#include <xrpld/ledger/Directory.h>
+#include <xrpld/ledger/Dir.h>
 #include <xrpld/ledger/View.h>
 #include <xrpl/basics/algorithm.h>
 #include <xrpl/protocol/Feature.h>
@@ -191,7 +191,9 @@ getPageForToken(
         : carr[0].getFieldH256(sfNFTokenID);
 
     auto np = std::make_shared<SLE>(keylet::nftpage(base, tokenIDForNewPage));
-    assert(np->key() > base.key);
+    ASSERT(
+        np->key() > base.key,
+        "ripple::nft::getPageForToken : valid NFT page index");
     np->setFieldArray(sfNFTokens, narr);
     np->setFieldH256(sfNextPageMin, cp->key());
 
@@ -243,7 +245,9 @@ compareTokens(uint256 const& a, uint256 const& b)
 TER
 insertToken(ApplyView& view, AccountID owner, STObject&& nft)
 {
-    assert(nft.isFieldPresent(sfNFTokenID));
+    ASSERT(
+        nft.isFieldPresent(sfNFTokenID),
+        "ripple::nft::insertToken : has NFT token");
 
     // First, we need to locate the page the NFT belongs to, creating it
     // if necessary. This operation may fail if it is impossible to insert
@@ -429,10 +433,48 @@ removeToken(
         return tesSUCCESS;
     }
 
-    // The page is empty, so we can just unlink it and then remove it.
     if (prev)
     {
-        // Make our previous page point to our next page:
+        // With fixNFTokenPageLinks...
+        // The page is empty and there is a prev.  If the last page of the
+        // directory is empty then we need to:
+        //  1. Move the contents of the previous page into the last page.
+        //  2. Fix up the link from prev's previous page.
+        //  3. Fix up the owner count.
+        //  4. Erase the previous page.
+        if (view.rules().enabled(fixNFTokenPageLinks) &&
+            ((curr->key() & nft::pageMask) == pageMask))
+        {
+            // Copy all relevant information from prev to curr.
+            curr->peekFieldArray(sfNFTokens) = prev->peekFieldArray(sfNFTokens);
+
+            if (auto const prevLink = prev->at(~sfPreviousPageMin))
+            {
+                curr->at(sfPreviousPageMin) = *prevLink;
+
+                // Also fix up the NextPageMin link in the new Previous.
+                auto const newPrev = loadPage(curr, sfPreviousPageMin);
+                newPrev->at(sfNextPageMin) = curr->key();
+                view.update(newPrev);
+            }
+            else
+            {
+                curr->makeFieldAbsent(sfPreviousPageMin);
+            }
+
+            adjustOwnerCount(
+                view,
+                view.peek(keylet::account(owner)),
+                -1,
+                beast::Journal{beast::Journal::getNullSink()});
+
+            view.update(curr);
+            view.erase(prev);
+            return tesSUCCESS;
+        }
+
+        // The page is empty and not the last page, so we can just unlink it
+        // and then remove it.
         if (next)
             prev->setFieldH256(sfNextPageMin, next->key());
         else
@@ -637,6 +679,126 @@ deleteTokenOffer(ApplyView& view, std::shared_ptr<SLE> const& offer)
     return true;
 }
 
+bool
+repairNFTokenDirectoryLinks(ApplyView& view, AccountID const& owner)
+{
+    bool didRepair = false;
+
+    auto const last = keylet::nftpage_max(owner);
+
+    std::shared_ptr<SLE> page = view.peek(Keylet(
+        ltNFTOKEN_PAGE,
+        view.succ(keylet::nftpage_min(owner).key, last.key.next())
+            .value_or(last.key)));
+
+    if (!page)
+        return didRepair;
+
+    if (page->key() == last.key)
+    {
+        // There's only one page in this entire directory.  There should be
+        // no links on that page.
+        bool const nextPresent = page->isFieldPresent(sfNextPageMin);
+        bool const prevPresent = page->isFieldPresent(sfPreviousPageMin);
+        if (nextPresent || prevPresent)
+        {
+            didRepair = true;
+            if (prevPresent)
+                page->makeFieldAbsent(sfPreviousPageMin);
+            if (nextPresent)
+                page->makeFieldAbsent(sfNextPageMin);
+            view.update(page);
+        }
+        return didRepair;
+    }
+
+    // First page is not the same as last page.  The first page should not
+    // contain a previous link.
+    if (page->isFieldPresent(sfPreviousPageMin))
+    {
+        didRepair = true;
+        page->makeFieldAbsent(sfPreviousPageMin);
+        view.update(page);
+    }
+
+    std::shared_ptr<SLE> nextPage;
+    while (
+        (nextPage = view.peek(Keylet(
+             ltNFTOKEN_PAGE,
+             view.succ(page->key().next(), last.key.next())
+                 .value_or(last.key)))))
+    {
+        if (!page->isFieldPresent(sfNextPageMin) ||
+            page->getFieldH256(sfNextPageMin) != nextPage->key())
+        {
+            didRepair = true;
+            page->setFieldH256(sfNextPageMin, nextPage->key());
+            view.update(page);
+        }
+
+        if (!nextPage->isFieldPresent(sfPreviousPageMin) ||
+            nextPage->getFieldH256(sfPreviousPageMin) != page->key())
+        {
+            didRepair = true;
+            nextPage->setFieldH256(sfPreviousPageMin, page->key());
+            view.update(nextPage);
+        }
+
+        if (nextPage->key() == last.key)
+            // We need special handling for the last page.
+            break;
+
+        page = nextPage;
+    }
+
+    // When we arrive here, nextPage should have the same index as last.
+    // If not, then that's something we need to fix.
+    if (!nextPage)
+    {
+        // It turns out that page is the last page for this owner, but
+        // that last page does not have the expected final index.  We need
+        // to move the contents of the current last page into a page with the
+        // correct index.
+        //
+        // The owner count does not need to change because, even though
+        // we're adding a page, we'll also remove the page that used to be
+        // last.
+        didRepair = true;
+        nextPage = std::make_shared<SLE>(last);
+
+        // Copy all relevant information from prev to curr.
+        nextPage->peekFieldArray(sfNFTokens) = page->peekFieldArray(sfNFTokens);
+
+        if (auto const prevLink = page->at(~sfPreviousPageMin))
+        {
+            nextPage->at(sfPreviousPageMin) = *prevLink;
+
+            // Also fix up the NextPageMin link in the new Previous.
+            auto const newPrev = view.peek(Keylet(ltNFTOKEN_PAGE, *prevLink));
+            if (!newPrev)
+                Throw<std::runtime_error>(
+                    "NFTokenPage directory for " + to_string(owner) +
+                    " cannot be repaired.  Unexpected link problem.");
+            newPrev->at(sfNextPageMin) = nextPage->key();
+            view.update(newPrev);
+        }
+        view.erase(page);
+        view.insert(nextPage);
+        return didRepair;
+    }
+
+    ASSERT(
+        nextPage != nullptr,
+        "ripple::nft::repairNFTokenDirectoryLinks : next page is available");
+    if (nextPage->isFieldPresent(sfNextPageMin))
+    {
+        didRepair = true;
+        nextPage->makeFieldAbsent(sfNextPageMin);
+        view.update(nextPage);
+    }
+    return didRepair;
+}
+
 NotTEC
 tokenOfferCreatePreflight(
     AccountID const& acctID,
@@ -735,7 +897,9 @@ tokenOfferCreatePreclaim(
     if (nftIssuer != acctID && !(nftFlags & nft::flagTransferable))
     {
         auto const root = view.read(keylet::account(nftIssuer));
-        assert(root);
+        ASSERT(
+            root != nullptr,
+            "ripple::nft::tokenOfferCreatePreclaim : non-null account");
 
         if (auto minter = (*root)[~sfNFTokenMinter]; minter != acctID)
             return tefNFTOKEN_IS_NOT_TRANSFERABLE;

@@ -25,7 +25,6 @@
 #include <xrpld/app/main/Application.h>
 #include <xrpld/app/misc/NetworkOPs.h>
 #include <xrpld/core/JobQueue.h>
-#include <xrpld/nodestore/DatabaseShard.h>
 #include <xrpld/overlay/Overlay.h>
 #include <xrpld/shamap/SHAMapNodeID.h>
 #include <xrpl/basics/Log.h>
@@ -114,40 +113,6 @@ InboundLedger::init(ScopedLockType& collectionLock)
 
     if (!complete_)
     {
-        auto shardStore = app_.getShardStore();
-        if (mReason == Reason::SHARD)
-        {
-            if (!shardStore)
-            {
-                JLOG(journal_.error())
-                    << "Acquiring shard with no shard store available";
-                failed_ = true;
-                return;
-            }
-
-            mHaveHeader = false;
-            mHaveTransactions = false;
-            mHaveState = false;
-            mLedger.reset();
-
-            tryDB(app_.getShardFamily()->db());
-            if (failed_)
-                return;
-        }
-        else if (shardStore && mSeq >= shardStore->earliestLedgerSeq())
-        {
-            if (auto l = shardStore->fetchLedger(hash_, mSeq))
-            {
-                mHaveHeader = true;
-                mHaveTransactions = true;
-                mHaveState = true;
-                complete_ = true;
-                mLedger = std::move(l);
-            }
-        }
-    }
-    if (!complete_)
-    {
         addPeers();
         queueJob(sl);
         return;
@@ -155,12 +120,13 @@ InboundLedger::init(ScopedLockType& collectionLock)
 
     JLOG(journal_.debug()) << "Acquiring ledger we already have in "
                            << " local store. " << hash_;
-    assert(
+    ASSERT(
         mLedger->info().seq < XRP_LEDGER_EARLIEST_FEES ||
-        mLedger->read(keylet::fees()));
+            mLedger->read(keylet::fees()),
+        "ripple::InboundLedger::init : valid ledger fees");
     mLedger->setImmutable();
 
-    if (mReason == Reason::HISTORY || mReason == Reason::SHARD)
+    if (mReason == Reason::HISTORY)
         return;
 
     app_.getLedgerMaster().storeLedger(mLedger);
@@ -200,8 +166,6 @@ InboundLedger::checkLocal()
     {
         if (mLedger)
             tryDB(mLedger->stateMap().family().db());
-        else if (mReason == Reason::SHARD)
-            tryDB(app_.getShardFamily()->db());
         else
             tryDB(app_.getNodeFamily().db());
         if (failed_ || complete_)
@@ -283,8 +247,7 @@ InboundLedger::tryDB(NodeStore::Database& srcDB)
             mLedger = std::make_shared<Ledger>(
                 deserializePrefixedHeader(makeSlice(data)),
                 app_.config(),
-                mReason == Reason::SHARD ? *app_.getShardFamily()
-                                         : app_.getNodeFamily());
+                app_.getNodeFamily());
             if (mLedger->info().hash != hash_ ||
                 (mSeq != 0 && mSeq != mLedger->info().seq))
             {
@@ -389,9 +352,10 @@ InboundLedger::tryDB(NodeStore::Database& srcDB)
     {
         JLOG(journal_.debug()) << "Had everything locally";
         complete_ = true;
-        assert(
+        ASSERT(
             mLedger->info().seq < XRP_LEDGER_EARLIEST_FEES ||
-            mLedger->read(keylet::fees()));
+                mLedger->read(keylet::fees()),
+            "ripple::InboundLedger::tryDB : valid ledger fees");
         mLedger->setImmutable();
     }
 }
@@ -485,19 +449,19 @@ InboundLedger::done()
                                       std::to_string(timeouts_) + " "))
                            << mStats.get();
 
-    assert(complete_ || failed_);
+    ASSERT(
+        complete_ || failed_,
+        "ripple::InboundLedger::done : complete or failed");
 
     if (complete_ && !failed_ && mLedger)
     {
-        assert(
+        ASSERT(
             mLedger->info().seq < XRP_LEDGER_EARLIEST_FEES ||
-            mLedger->read(keylet::fees()));
+                mLedger->read(keylet::fees()),
+            "ripple::InboundLedger::done : valid ledger fees");
         mLedger->setImmutable();
         switch (mReason)
         {
-            case Reason::SHARD:
-                app_.getShardStore()->setStored(mLedger);
-                [[fallthrough]];
             case Reason::HISTORY:
                 app_.getInboundLedgers().onLedgerFetched();
                 break;
@@ -536,7 +500,7 @@ InboundLedger::trigger(std::shared_ptr<Peer> const& peer, TriggerReason reason)
         return;
     }
 
-    if (auto stream = journal_.trace())
+    if (auto stream = journal_.debug())
     {
         stream << "Trigger acquiring ledger " << hash_;
         if (peer)
@@ -551,9 +515,7 @@ InboundLedger::trigger(std::shared_ptr<Peer> const& peer, TriggerReason reason)
 
     if (!mHaveHeader)
     {
-        tryDB(
-            mReason == Reason::SHARD ? app_.getShardFamily()->db()
-                                     : app_.getNodeFamily().db());
+        tryDB(app_.getNodeFamily().db());
         if (failed_)
         {
             JLOG(journal_.warn()) << " failed local for " << hash_;
@@ -656,7 +618,10 @@ InboundLedger::trigger(std::shared_ptr<Peer> const& peer, TriggerReason reason)
     // if we wind up abandoning this fetch.
     if (mHaveHeader && !mHaveState && !failed_)
     {
-        assert(mLedger);
+        ASSERT(
+            mLedger != nullptr,
+            "ripple::InboundLedger::trigger : non-null ledger to read state "
+            "from");
 
         if (!mLedger->stateMap().isValid())
         {
@@ -728,7 +693,10 @@ InboundLedger::trigger(std::shared_ptr<Peer> const& peer, TriggerReason reason)
 
     if (mHaveHeader && !mHaveTransactions && !failed_)
     {
-        assert(mLedger);
+        ASSERT(
+            mLedger != nullptr,
+            "ripple::InboundLedger::trigger : non-null ledger to read "
+            "transactions from");
 
         if (!mLedger->txMap().isValid())
         {
@@ -854,8 +822,7 @@ InboundLedger::takeHeader(std::string const& data)
     if (complete_ || failed_ || mHaveHeader)
         return true;
 
-    auto* f = mReason == Reason::SHARD ? app_.getShardFamily()
-                                       : &app_.getNodeFamily();
+    auto* f = &app_.getNodeFamily();
     mLedger = std::make_shared<Ledger>(
         deserializeHeader(makeSlice(data)), app_.config(), *f);
     if (mLedger->info().hash != hash_ ||
@@ -994,7 +961,7 @@ InboundLedger::takeAsRootNode(Slice const& data, SHAMapAddNode& san)
 
     if (!mHaveHeader)
     {
-        assert(false);
+        UNREACHABLE("ripple::InboundLedger::takeAsRootNode : no ledger header");
         return false;
     }
 
@@ -1019,7 +986,7 @@ InboundLedger::takeTxRootNode(Slice const& data, SHAMapAddNode& san)
 
     if (!mHaveHeader)
     {
-        assert(false);
+        UNREACHABLE("ripple::InboundLedger::takeTxRootNode : no ledger header");
         return false;
     }
 

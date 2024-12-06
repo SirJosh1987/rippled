@@ -24,7 +24,6 @@
 #include <xrpld/app/misc/ValidatorSite.h>
 #include <xrpld/app/rdb/RelationalDatabase.h>
 #include <xrpld/app/rdb/Wallet.h>
-#include <xrpld/nodestore/DatabaseShard.h>
 #include <xrpld/overlay/Cluster.h>
 #include <xrpld/overlay/detail/ConnectAttempt.h>
 #include <xrpld/overlay/detail/PeerImp.h>
@@ -295,7 +294,9 @@ OverlayImpl::onHandoff(
             std::lock_guard<decltype(mutex_)> lock(mutex_);
             {
                 auto const result = m_peers.emplace(peer->slot(), peer);
-                assert(result.second);
+                ASSERT(
+                    result.second,
+                    "ripple::OverlayImpl::onHandoff : peer is inserted");
                 (void)result.second;
             }
             list_.emplace(peer.get(), peer);
@@ -388,7 +389,7 @@ OverlayImpl::makeErrorResponse(
 void
 OverlayImpl::connect(beast::IP::Endpoint const& remote_endpoint)
 {
-    assert(work_);
+    ASSERT(work_.has_value(), "ripple::OverlayImpl::connect : work is set");
 
     auto usage = resourceManager().newOutboundEndpoint(remote_endpoint);
     if (usage.disconnect(journal_))
@@ -430,7 +431,9 @@ OverlayImpl::add_active(std::shared_ptr<PeerImp> const& peer)
 
     {
         auto const result = m_peers.emplace(peer->slot(), peer);
-        assert(result.second);
+        ASSERT(
+            result.second,
+            "ripple::OverlayImpl::add_active : peer is inserted");
         (void)result.second;
     }
 
@@ -439,7 +442,9 @@ OverlayImpl::add_active(std::shared_ptr<PeerImp> const& peer)
             std::piecewise_construct,
             std::make_tuple(peer->id()),
             std::make_tuple(peer));
-        assert(result.second);
+        ASSERT(
+            result.second,
+            "ripple::OverlayImpl::add_active : peer ID is inserted");
         (void)result.second;
     }
 
@@ -462,7 +467,7 @@ OverlayImpl::remove(std::shared_ptr<PeerFinder::Slot> const& slot)
 {
     std::lock_guard lock(mutex_);
     auto const iter = m_peers.find(slot);
-    assert(iter != m_peers.end());
+    ASSERT(iter != m_peers.end(), "ripple::OverlayImpl::remove : valid input");
     m_peers.erase(iter);
 }
 
@@ -492,6 +497,9 @@ OverlayImpl::start()
 
         // Pool of servers operated by ISRDC - https://isrdc.in
         bootstrapIps.push_back("sahyadri.isrdc.in 51235");
+
+        // Pool of servers operated by @Xrpkuwait - https://xrpkuwait.com
+        bootstrapIps.push_back("hubs.xrpkuwait.com 51235");
     }
 
     m_resolver.resolve(
@@ -596,7 +604,9 @@ OverlayImpl::activate(std::shared_ptr<PeerImp> const& peer)
             std::piecewise_construct,
             std::make_tuple(peer->id()),
             std::make_tuple(peer)));
-        assert(result.second);
+        ASSERT(
+            result.second,
+            "ripple::OverlayImpl::activate : peer ID is inserted");
         (void)result.second;
     }
 
@@ -607,7 +617,7 @@ OverlayImpl::activate(std::shared_ptr<PeerImp> const& peer)
                            << ")";
 
     // We just accepted this peer so we have non-zero active peers
-    assert(size() != 0);
+    ASSERT(size() != 0, "ripple::OverlayImpl::activate : nonzero peers");
 }
 
 void
@@ -646,7 +656,10 @@ OverlayImpl::onManifests(
                 //       the loaded Manifest out of the optional so we need to
                 //       reload it here.
                 mo = deserializeManifest(serialized);
-                assert(mo);
+                ASSERT(
+                    mo.has_value(),
+                    "ripple::OverlayImpl::onManifests : manifest "
+                    "deserialization succeeded");
 
                 app_.getOPs().pubManifest(*mo);
 
@@ -677,103 +690,6 @@ OverlayImpl::reportTraffic(
     int number)
 {
     m_traffic.addCount(cat, isInbound, number);
-}
-
-Json::Value
-OverlayImpl::crawlShards(bool includePublicKey, std::uint32_t relays)
-{
-    using namespace std::chrono;
-
-    Json::Value jv(Json::objectValue);
-
-    // Add shard info from this server to json result
-    if (auto shardStore = app_.getShardStore())
-    {
-        if (includePublicKey)
-            jv[jss::public_key] =
-                toBase58(TokenType::NodePublic, app_.nodeIdentity().first);
-
-        auto const shardInfo{shardStore->getShardInfo()};
-        if (!shardInfo->finalized().empty())
-            jv[jss::complete_shards] = shardInfo->finalizedToString();
-        if (!shardInfo->incomplete().empty())
-            jv[jss::incomplete_shards] = shardInfo->incompleteToString();
-    }
-
-    if (relays == 0 || size() == 0)
-        return jv;
-
-    {
-        protocol::TMGetPeerShardInfoV2 tmGPS;
-        tmGPS.set_relays(relays);
-
-        // Wait if a request is in progress
-        std::unique_lock<std::mutex> csLock{csMutex_};
-        if (!csIDs_.empty())
-            csCV_.wait(csLock);
-
-        {
-            std::lock_guard lock{mutex_};
-            for (auto const& id : ids_)
-                csIDs_.emplace(id.first);
-        }
-
-        // Request peer shard info
-        foreach(send_always(std::make_shared<Message>(
-            tmGPS, protocol::mtGET_PEER_SHARD_INFO_V2)));
-
-        if (csCV_.wait_for(csLock, seconds(60)) == std::cv_status::timeout)
-        {
-            csIDs_.clear();
-            csCV_.notify_all();
-        }
-    }
-
-    // Combine shard info from peers
-    hash_map<PublicKey, NodeStore::ShardInfo> peerShardInfo;
-    for_each([&](std::shared_ptr<PeerImp>&& peer) {
-        auto const psi{peer->getPeerShardInfos()};
-        for (auto const& [publicKey, shardInfo] : psi)
-        {
-            auto const it{peerShardInfo.find(publicKey)};
-            if (it == peerShardInfo.end())
-                peerShardInfo.emplace(publicKey, shardInfo);
-            else if (shardInfo.msgTimestamp() > it->second.msgTimestamp())
-                it->second = shardInfo;
-        }
-    });
-
-    // Add shard info to json result
-    if (!peerShardInfo.empty())
-    {
-        auto& av = jv[jss::peers] = Json::Value(Json::arrayValue);
-        for (auto const& [publicKey, shardInfo] : peerShardInfo)
-        {
-            auto& pv{av.append(Json::Value(Json::objectValue))};
-            if (includePublicKey)
-            {
-                pv[jss::public_key] =
-                    toBase58(TokenType::NodePublic, publicKey);
-            }
-
-            if (!shardInfo.finalized().empty())
-                pv[jss::complete_shards] = shardInfo.finalizedToString();
-            if (!shardInfo.incomplete().empty())
-                pv[jss::incomplete_shards] = shardInfo.incompleteToString();
-        }
-    }
-
-    return jv;
-}
-
-void
-OverlayImpl::endOfPeerChain(std::uint32_t id)
-{
-    // Notify threads if all peers have received a reply from all peer chains
-    std::lock_guard csLock{csMutex_};
-    csIDs_.erase(id);
-    if (csIDs_.empty())
-        csCV_.notify_all();
 }
 
 /** The number of active peers on the network
@@ -833,17 +749,6 @@ OverlayImpl::getOverlayInfo()
         if (minSeq != 0 || maxSeq != 0)
             pv[jss::complete_ledgers] =
                 std::to_string(minSeq) + "-" + std::to_string(maxSeq);
-
-        auto const peerShardInfos{sp->getPeerShardInfos()};
-        auto const it{peerShardInfos.find(sp->getNodePublic())};
-        if (it != peerShardInfos.end())
-        {
-            auto const& shardInfo{it->second};
-            if (!shardInfo.finalized().empty())
-                pv[jss::complete_shards] = shardInfo.finalizedToString();
-            if (!shardInfo.incomplete().empty())
-                pv[jss::incomplete_shards] = shardInfo.incompleteToString();
-        }
     });
 
     return jv;
@@ -1163,9 +1068,11 @@ OverlayImpl::getActivePeers(
     disabled = enabledInSkip = 0;
     ret.reserve(ids_.size());
 
+    // NOTE The purpose of p is to delay the destruction of PeerImp
+    std::shared_ptr<PeerImp> p;
     for (auto& [id, w] : ids_)
     {
-        if (auto p = w.lock())
+        if (p = w.lock(); p != nullptr)
         {
             bool const reduceRelayEnabled = p->txReduceRelayEnabled();
             // tx reduced relay feature disabled
@@ -1205,9 +1112,11 @@ std::shared_ptr<Peer>
 OverlayImpl::findPeerByPublicKey(PublicKey const& pubKey)
 {
     std::lock_guard lock(mutex_);
+    // NOTE The purpose of peer is to delay the destruction of PeerImp
+    std::shared_ptr<PeerImp> peer;
     for (auto const& e : ids_)
     {
-        if (auto peer = e.second.lock())
+        if (peer = e.second.lock(); peer != nullptr)
         {
             if (peer->getNodePublic() == pubKey)
                 return peer;

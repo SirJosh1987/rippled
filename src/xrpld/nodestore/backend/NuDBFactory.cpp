@@ -23,8 +23,8 @@
 #include <xrpld/nodestore/detail/EncodedBlob.h>
 #include <xrpld/nodestore/detail/codec.h>
 #include <xrpl/basics/contract.h>
+#include <xrpl/beast/utility/instrumentation.h>
 #include <boost/filesystem.hpp>
-#include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -38,11 +38,11 @@ namespace NodeStore {
 class NuDBBackend : public Backend
 {
 public:
-    static constexpr std::uint64_t currentType = 1;
-    static constexpr std::uint64_t deterministicMask = 0xFFFFFFFF00000000ull;
-
-    /* "SHRD" in ASCII */
-    static constexpr std::uint64_t deterministicType = 0x5348524400000000ull;
+    // "appnum" is an application-defined constant stored in the header of a
+    // NuDB database. We used it to identify shard databases before that code
+    // was removed. For now, its only use is a sanity check that the database
+    // was created by xrpld.
+    static constexpr std::uint64_t appnum = 1;
 
     beast::Journal const j_;
     size_t const keyBytes_;
@@ -117,7 +117,9 @@ public:
         using namespace boost::filesystem;
         if (db_.is_open())
         {
-            assert(false);
+            UNREACHABLE(
+                "ripple::NodeStore::NuDBBackend::open : database is already "
+                "open");
             JLOG(j_.error()) << "database is already open";
             return;
         }
@@ -149,16 +151,7 @@ public:
         if (ec)
             Throw<nudb::system_error>(ec);
 
-        /** Old value currentType is accepted for appnum in traditional
-         *  databases, new value is used for deterministic shard databases.
-         *  New 64-bit value is constructed from fixed and random parts.
-         *  Fixed part is bounded by bitmask deterministicMask,
-         *  and the value of fixed part is deterministicType.
-         *  Random part depends on the contents of the shard and may be any.
-         *  The contents of appnum field should match either old or new rule.
-         */
-        if (db_.appnum() != currentType &&
-            (db_.appnum() & deterministicMask) != deterministicType)
+        if (db_.appnum() != appnum)
             Throw<std::runtime_error>("nodestore: unknown appnum");
         db_.set_burst(burstSize_);
     }
@@ -172,7 +165,7 @@ public:
     void
     open(bool createIfMissing) override
     {
-        open(createIfMissing, currentType, nudb::make_uid(), nudb::make_salt());
+        open(createIfMissing, appnum, nudb::make_uid(), nudb::make_salt());
     }
 
     void

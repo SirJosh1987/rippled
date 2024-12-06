@@ -74,6 +74,7 @@ target_compile_definitions(xrpl.libxrpl
 target_compile_options(xrpl.libxrpl
   PUBLIC
     $<$<BOOL:${is_gcc}>:-Wno-maybe-uninitialized>
+    $<$<BOOL:${voidstar}>:-DENABLE_VOIDSTAR>
 )
 
 target_link_libraries(xrpl.libxrpl
@@ -89,6 +90,7 @@ target_link_libraries(xrpl.libxrpl
     secp256k1::secp256k1
     xrpl.libpb
     xxHash::xxhash
+    $<$<BOOL:${voidstar}>:antithesis-sdk-cpp>
 )
 
 if(xrpld)
@@ -129,12 +131,17 @@ if(xrpld)
     target_compile_definitions(rippled PRIVATE RIPPLED_RUNNING_IN_CI)
   endif ()
 
-  if(reporting)
-    set(suffix -reporting)
-    set_target_properties(rippled PROPERTIES OUTPUT_NAME rippled-reporting)
-    get_target_property(BIN_NAME rippled OUTPUT_NAME)
-    message(STATUS "Reporting mode build: rippled renamed ${BIN_NAME}")
-    target_compile_definitions(rippled PRIVATE RIPPLED_REPORTING)
+  if(voidstar)
+    target_compile_options(rippled
+      PRIVATE
+        -fsanitize-coverage=trace-pc-guard
+    )
+    # rippled requires access to antithesis-sdk-cpp implementation file
+    # antithesis_instrumentation.h, which is not exported as INTERFACE
+    target_include_directories(rippled
+      PRIVATE
+        ${CMAKE_SOURCE_DIR}/external/antithesis-sdk
+    )
   endif()
 
   # any files that don't play well with unity should be added here
@@ -142,7 +149,6 @@ if(xrpld)
     set_source_files_properties(
       # these two seem to produce conflicts in beast teardown template methods
       src/test/rpc/ValidatorRPC_test.cpp
-      src/test/rpc/ShardArchiveHandler_test.cpp
       src/test/ledger/Invariants_test.cpp
       PROPERTIES SKIP_UNITY_BUILD_INCLUSION TRUE)
   endif()

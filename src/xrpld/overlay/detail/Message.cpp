@@ -34,7 +34,9 @@ Message::Message(
 
     auto const messageBytes = messageSize(message);
 
-    assert(messageBytes != 0);
+    ASSERT(
+        messageBytes != 0,
+        "ripple::Message::Message : non-empty message input");
 
     buffer_.resize(headerBytes + messageBytes);
 
@@ -43,7 +45,9 @@ Message::Message(
     if (messageBytes != 0)
         message.SerializeToArray(buffer_.data() + headerBytes, messageBytes);
 
-    assert(getBufferSize() == totalSize(message));
+    ASSERT(
+        getBufferSize() == totalSize(message),
+        "ripple::Message::Message : message size matches the buffer");
 }
 
 // static
@@ -94,13 +98,9 @@ Message::compress()
             case protocol::mtSTATUS_CHANGE:
             case protocol::mtHAVE_SET:
             case protocol::mtVALIDATION:
-            case protocol::mtGET_PEER_SHARD_INFO:
-            case protocol::mtPEER_SHARD_INFO:
             case protocol::mtPROOF_PATH_REQ:
             case protocol::mtPROOF_PATH_RESPONSE:
             case protocol::mtREPLAY_DELTA_REQ:
-            case protocol::mtGET_PEER_SHARD_INFO_V2:
-            case protocol::mtPEER_SHARD_INFO_V2:
             case protocol::mtHAVE_TRANSACTIONS:
                 break;
         }

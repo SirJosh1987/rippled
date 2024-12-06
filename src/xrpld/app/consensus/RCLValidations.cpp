@@ -27,6 +27,7 @@
 #include <xrpld/consensus/LedgerTiming.h>
 #include <xrpld/core/JobQueue.h>
 #include <xrpld/core/TimeKeeper.h>
+#include <xrpld/perflog/PerfLog.h>
 #include <xrpl/basics/Log.h>
 #include <xrpl/basics/StringUtilities.h>
 #include <xrpl/basics/chrono.h>
@@ -49,7 +50,10 @@ RCLValidatedLedger::RCLValidatedLedger(
     auto const hashIndex = ledger->read(keylet::skip());
     if (hashIndex)
     {
-        assert(hashIndex->getFieldU32(sfLastLedgerSequence) == (seq() - 1));
+        ASSERT(
+            hashIndex->getFieldU32(sfLastLedgerSequence) == (seq() - 1),
+            "ripple::RCLValidatedLedger::RCLValidatedLedger(Ledger) : valid "
+            "last ledger sequence");
         ancestors_ = hashIndex->getFieldV256(sfHashes).value();
     }
     else
@@ -126,7 +130,13 @@ RCLValidationsAdaptor::now() const
 std::optional<RCLValidatedLedger>
 RCLValidationsAdaptor::acquire(LedgerHash const& hash)
 {
-    auto ledger = app_.getLedgerMaster().getLedgerByHash(hash);
+    using namespace std::chrono_literals;
+    auto ledger = perf::measureDurationAndLog(
+        [&]() { return app_.getLedgerMaster().getLedgerByHash(hash); },
+        "getLedgerByHash",
+        10ms,
+        j_);
+
     if (!ledger)
     {
         JLOG(j_.debug())
@@ -135,15 +145,21 @@ RCLValidationsAdaptor::acquire(LedgerHash const& hash)
         Application* pApp = &app_;
 
         app_.getJobQueue().addJob(
-            jtADVANCE, "getConsensusLedger", [pApp, hash]() {
-                pApp->getInboundLedgers().acquire(
+            jtADVANCE, "getConsensusLedger2", [pApp, hash, this]() {
+                JLOG(j_.debug())
+                    << "JOB advanceLedger getConsensusLedger2 started";
+                pApp->getInboundLedgers().acquireAsync(
                     hash, 0, InboundLedger::Reason::CONSENSUS);
             });
         return std::nullopt;
     }
 
-    assert(!ledger->open() && ledger->isImmutable());
-    assert(ledger->info().hash == hash);
+    ASSERT(
+        !ledger->open() && ledger->isImmutable(),
+        "ripple::RCLValidationsAdaptor::acquire : valid ledger state");
+    ASSERT(
+        ledger->info().hash == hash,
+        "ripple::RCLValidationsAdaptor::acquire : ledger hash match");
 
     return RCLValidatedLedger(std::move(ledger), j_);
 }
@@ -152,7 +168,9 @@ void
 handleNewValidation(
     Application& app,
     std::shared_ptr<STValidation> const& val,
-    std::string const& source)
+    std::string const& source,
+    BypassAccept const bypassAccept,
+    std::optional<beast::Journal> j)
 {
     auto const& signingKey = val->getSignerPublic();
     auto const& hash = val->getLedgerHash();
@@ -177,7 +195,23 @@ handleNewValidation(
     if (outcome == ValStatus::current)
     {
         if (val->isTrusted())
-            app.getLedgerMaster().checkAccept(hash, seq);
+        {
+            if (bypassAccept == BypassAccept::yes)
+            {
+                ASSERT(
+                    j.has_value(),
+                    "ripple::handleNewValidation : journal is available");
+                if (j.has_value())
+                {
+                    JLOG(j->trace()) << "Bypassing checkAccept for validation "
+                                     << val->getLedgerHash();
+                }
+            }
+            else
+            {
+                app.getLedgerMaster().checkAccept(hash, seq);
+            }
+        }
         return;
     }
 

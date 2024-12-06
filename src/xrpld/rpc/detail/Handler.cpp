@@ -38,7 +38,7 @@ byRef(Function const& f)
         result = f(context);
         if (result.type() != Json::objectValue)
         {
-            assert(false);
+            UNREACHABLE("ripple::RPC::byRef : result is object");
             result = RPC::makeObjectValue(result);
         }
 
@@ -50,9 +50,10 @@ template <class Object, class HandlerImpl>
 Status
 handle(JsonContext& context, Object& object)
 {
-    assert(
+    ASSERT(
         context.apiVersion >= HandlerImpl::minApiVer &&
-        context.apiVersion <= HandlerImpl::maxApiVer);
+            context.apiVersion <= HandlerImpl::maxApiVer,
+        "ripple::RPC::handle : valid API version");
     HandlerImpl handler(context);
 
     auto status = handler.check();
@@ -99,20 +100,14 @@ Handler const handlerArray[]{
     {"channel_verify", byRef(&doChannelVerify), Role::USER, NO_CONDITION},
     {"connect", byRef(&doConnect), Role::ADMIN, NO_CONDITION},
     {"consensus_info", byRef(&doConsensusInfo), Role::ADMIN, NO_CONDITION},
-    {"crawl_shards", byRef(&doCrawlShards), Role::ADMIN, NO_CONDITION},
     {"deposit_authorized",
      byRef(&doDepositAuthorized),
      Role::USER,
      NO_CONDITION},
-    {"download_shard", byRef(&doDownloadShard), Role::ADMIN, NO_CONDITION},
     {"feature", byRef(&doFeature), Role::USER, NO_CONDITION},
     {"fee", byRef(&doFee), Role::USER, NEEDS_CURRENT_LEDGER},
     {"fetch_info", byRef(&doFetchInfo), Role::ADMIN, NO_CONDITION},
-#ifdef RIPPLED_REPORTING
-    {"gateway_balances", byRef(&doGatewayBalances), Role::ADMIN, NO_CONDITION},
-#else
     {"gateway_balances", byRef(&doGatewayBalances), Role::USER, NO_CONDITION},
-#endif
     {"get_counts", byRef(&doGetCounts), Role::ADMIN, NO_CONDITION},
     {"get_aggregate_price",
      byRef(&doGetAggregatePrice),
@@ -140,7 +135,6 @@ Handler const handlerArray[]{
     {"manifest", byRef(&doManifest), Role::USER, NO_CONDITION},
     {"nft_buy_offers", byRef(&doNFTBuyOffers), Role::USER, NO_CONDITION},
     {"nft_sell_offers", byRef(&doNFTSellOffers), Role::USER, NO_CONDITION},
-    {"node_to_shard", byRef(&doNodeToShard), Role::ADMIN, NO_CONDITION},
     {"noripple_check", byRef(&doNoRippleCheck), Role::USER, NO_CONDITION},
     {"owner_info", byRef(&doOwnerInfo), Role::USER, NEEDS_CURRENT_LEDGER},
     {"peers", byRef(&doPeers), Role::ADMIN, NO_CONDITION},
@@ -211,8 +205,12 @@ private:
         unsigned minVer,
         unsigned maxVer)
     {
-        assert(minVer <= maxVer);
-        assert(maxVer <= RPC::apiMaximumValidVersion);
+        ASSERT(
+            minVer <= maxVer,
+            "ripple::RPC::HandlerTable : valid API version range");
+        ASSERT(
+            maxVer <= RPC::apiMaximumValidVersion,
+            "ripple::RPC::HandlerTable : valid max API version");
 
         return std::any_of(
             range.first,

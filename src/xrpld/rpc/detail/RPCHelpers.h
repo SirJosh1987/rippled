@@ -213,7 +213,9 @@ template <class Object>
 void
 setVersion(Object& parent, unsigned int apiVersion, bool betaEnabled)
 {
-    assert(apiVersion != apiInvalidVersion);
+    ASSERT(
+        apiVersion != apiInvalidVersion,
+        "ripple::RPC::setVersion : input is valid");
     auto&& object = addObject(parent, jss::version);
     if (apiVersion == apiVersionIfUnspecified)
     {
@@ -231,6 +233,15 @@ setVersion(Object& parent, unsigned int apiVersion, bool betaEnabled)
 
 std::pair<RPC::Status, LedgerEntryType>
 chooseLedgerEntryType(Json::Value const& params);
+
+/**
+ * Check if the type is a valid filtering type for account_objects method
+ *
+ * Since Amendments, DirectoryNode, FeeSettings, LedgerHashes can not be
+ * owned by an account, this function will return false in these situations.
+ */
+bool
+isAccountObjectsValidType(LedgerEntryType const& type);
 
 /**
  * Retrieve the api version number from the json value

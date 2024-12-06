@@ -35,11 +35,11 @@
 #include <xrpld/app/misc/ValidatorKeys.h>
 #include <xrpld/app/misc/ValidatorList.h>
 #include <xrpld/consensus/LedgerTiming.h>
-#include <xrpld/nodestore/DatabaseShard.h>
 #include <xrpld/overlay/Overlay.h>
 #include <xrpld/overlay/predicates.h>
 #include <xrpl/basics/random.h>
 #include <xrpl/beast/core/LexicalCast.h>
+#include <xrpl/beast/utility/instrumentation.h>
 #include <xrpl/protocol/BuildInfo.h>
 #include <xrpl/protocol/Feature.h>
 #include <xrpl/protocol/digest.h>
@@ -93,7 +93,9 @@ RCLConsensus::Adaptor::Adaptor(
               std::numeric_limits<std::uint64_t>::max() - 1))
     , nUnlVote_(validatorKeys_.nodeID, j_)
 {
-    assert(valCookie_ != 0);
+    ASSERT(
+        valCookie_ != 0,
+        "ripple::RCLConsensus::Adaptor::Adaptor : nonzero cookie");
 
     JLOG(j_.info()) << "Consensus engine started (cookie: " +
             std::to_string(valCookie_) + ")";
@@ -135,16 +137,24 @@ RCLConsensus::Adaptor::acquireLedger(LedgerHash const& hash)
             acquiringLedger_ = hash;
 
             app_.getJobQueue().addJob(
-                jtADVANCE, "getConsensusLedger", [id = hash, &app = app_]() {
-                    app.getInboundLedgers().acquire(
+                jtADVANCE,
+                "getConsensusLedger1",
+                [id = hash, &app = app_, this]() {
+                    JLOG(j_.debug())
+                        << "JOB advanceLedger getConsensusLedger1 started";
+                    app.getInboundLedgers().acquireAsync(
                         id, 0, InboundLedger::Reason::CONSENSUS);
                 });
         }
         return std::nullopt;
     }
 
-    assert(!built->open() && built->isImmutable());
-    assert(built->info().hash == hash);
+    ASSERT(
+        !built->open() && built->isImmutable(),
+        "ripple::RCLConsensus::Adaptor::acquireLedger : valid ledger state");
+    ASSERT(
+        built->info().hash == hash,
+        "ripple::RCLConsensus::Adaptor::acquireLedger : ledger hash match");
 
     // Notify inbound transactions of the new ledger sequence number
     inboundTransactions_.newRound(built->info().seq);
@@ -670,8 +680,12 @@ RCLConsensus::Adaptor::doAccept(
         ledgerMaster_.switchLCL(built.ledger_);
 
         // Do these need to exist?
-        assert(ledgerMaster_.getClosedLedger()->info().hash == built.id());
-        assert(app_.openLedger().current()->info().parentHash == built.id());
+        ASSERT(
+            ledgerMaster_.getClosedLedger()->info().hash == built.id(),
+            "ripple::RCLConsensus::Adaptor::doAccept : ledger hash match");
+        ASSERT(
+            app_.openLedger().current()->info().parentHash == built.id(),
+            "ripple::RCLConsensus::Adaptor::doAccept : parent hash match");
     }
 
     //-------------------------------------------------------------------------
@@ -767,7 +781,9 @@ RCLConsensus::Adaptor::buildLCL(
     std::shared_ptr<Ledger> built = [&]() {
         if (auto const replayData = ledgerMaster_.releaseReplay())
         {
-            assert(replayData->parent()->info().hash == previousLedger.id());
+            ASSERT(
+                replayData->parent()->info().hash == previousLedger.id(),
+                "ripple::RCLConsensus::Adaptor::buildLCL : parent hash match");
             return buildLedger(*replayData, tapNONE, app_, j_);
         }
         return buildLedger(

@@ -27,6 +27,7 @@
 #include <xrpld/core/DatabaseCon.h>
 #include <xrpld/peerfinder/detail/Store.h>
 #include <xrpld/rpc/detail/RPCHelpers.h>
+#include <xrpl/beast/utility/instrumentation.h>
 #include <boost/filesystem.hpp>
 #include <boost/optional.hpp>
 #include <boost/variant.hpp>
@@ -109,29 +110,6 @@ public:
         LedgerRange ledgerRange;
         uint32_t limit;
         std::optional<AccountTxMarker> marker;
-    };
-
-    /// Struct used to keep track of what to write to transactions and
-    /// account_transactions tables in Postgres
-    struct AccountTransactionsData
-    {
-        boost::container::flat_set<AccountID> accounts;
-        uint32_t ledgerSequence;
-        uint32_t transactionIndex;
-        uint256 txHash;
-        uint256 nodestoreHash;
-
-        AccountTransactionsData(
-            TxMeta const& meta,
-            uint256 const& nodestoreHash,
-            beast::Journal j)
-            : accounts(meta.getAffectedAccounts())
-            , ledgerSequence(meta.getLgrSeq())
-            , transactionIndex(meta.getIndex())
-            , txHash(meta.getTxID())
-            , nodestoreHash(nodestoreHash)
-        {
-        }
     };
 
     /**
@@ -258,10 +236,10 @@ rangeCheckedCast(C c)
          c < std::numeric_limits<T>::lowest()))
     {
         /* This should never happen */
-        assert(0);
+        UNREACHABLE("ripple::rangeCheckedCast : domain error");
         JLOG(debugLog().error())
-            << "rangeCheckedCast domain error:"
-            << " value = " << c << " min = " << std::numeric_limits<T>::lowest()
+            << "rangeCheckedCast domain error:" << " value = " << c
+            << " min = " << std::numeric_limits<T>::lowest()
             << " max: " << std::numeric_limits<T>::max();
     }
 

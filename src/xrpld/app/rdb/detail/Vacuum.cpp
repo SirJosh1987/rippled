@@ -23,12 +23,14 @@
 namespace ripple {
 
 bool
-doVacuumDB(DatabaseCon::Setup const& setup)
+doVacuumDB(DatabaseCon::Setup const& setup, beast::Journal j)
 {
     boost::filesystem::path dbPath = setup.dataDir / TxDBName;
 
     uintmax_t const dbSize = file_size(dbPath);
-    assert(dbSize != static_cast<uintmax_t>(-1));
+    ASSERT(
+        dbSize != static_cast<uintmax_t>(-1),
+        "ripple:doVacuumDB : file_size succeeded");
 
     if (auto available = space(dbPath.parent_path()).available;
         available < dbSize)
@@ -40,8 +42,8 @@ doVacuumDB(DatabaseCon::Setup const& setup)
         return false;
     }
 
-    auto txnDB =
-        std::make_unique<DatabaseCon>(setup, TxDBName, TxDBPragma, TxDBInit);
+    auto txnDB = std::make_unique<DatabaseCon>(
+        setup, TxDBName, setup.txPragma, TxDBInit, j);
     auto& session = txnDB->getSession();
     std::uint32_t pageSize;
 
@@ -54,7 +56,9 @@ doVacuumDB(DatabaseCon::Setup const& setup)
     std::cout << "VACUUM beginning. page_size: " << pageSize << std::endl;
 
     session << "VACUUM;";
-    assert(setup.globalPragma);
+    ASSERT(
+        setup.globalPragma != nullptr,
+        "ripple:doVacuumDB : non-null global pragma");
     for (auto const& p : *setup.globalPragma)
         session << p;
     session << "PRAGMA page_size;", soci::into(pageSize);

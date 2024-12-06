@@ -53,17 +53,22 @@ private:
                        int limit,
                        std::chrono::milliseconds avgLatency,
                        std::chrono::milliseconds peakLatency) {
-            assert(m_map.find(jt) == m_map.end());
+            ASSERT(
+                m_map.find(jt) == m_map.end(),
+                "ripple::JobTypes::JobTypes::add : unique job type input");
 
-            auto const [_, inserted] = m_map.emplace(
-                std::piecewise_construct,
-                std::forward_as_tuple(jt),
-                std::forward_as_tuple(
-                    jt, name, limit, avgLatency, peakLatency));
+            [[maybe_unused]] auto const inserted =
+                m_map
+                    .emplace(
+                        std::piecewise_construct,
+                        std::forward_as_tuple(jt),
+                        std::forward_as_tuple(
+                            jt, name, limit, avgLatency, peakLatency))
+                    .second;
 
-            assert(inserted == true);
-            (void)_;
-            (void)inserted;
+            ASSERT(
+                inserted == true,
+                "ripple::JobTypes::JobTypes::add : input is inserted");
         };
 
         // clang-format off
@@ -84,7 +89,6 @@ private:
         add(jtCLIENT_FEE_CHANGE, "clientFeeChange",      maxLimit,  2000ms,  5000ms);
         add(jtCLIENT_CONSENSUS,  "clientConsensus",      maxLimit,  2000ms,  5000ms);
         add(jtCLIENT_ACCT_HIST,  "clientAccountHistory", maxLimit,  2000ms,  5000ms);
-        add(jtCLIENT_SHARD,      "clientShardArchive",   maxLimit,  2000ms,  5000ms);
         add(jtCLIENT_RPC,        "clientRPC",            maxLimit,  2000ms,  5000ms);
         add(jtCLIENT_WEBSOCKET,  "clientWebsocket",      maxLimit,  2000ms,  5000ms);
         add(jtRPC,               "RPC",                  maxLimit,     0ms,     0ms);
@@ -138,7 +142,7 @@ public:
     get(JobType jt) const
     {
         Map::const_iterator const iter(m_map.find(jt));
-        assert(iter != m_map.end());
+        ASSERT(iter != m_map.end(), "ripple::JobTypes::get : valid input");
 
         if (iter != m_map.end())
             return iter->second;

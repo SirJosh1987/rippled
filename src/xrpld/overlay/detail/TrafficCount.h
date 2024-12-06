@@ -21,6 +21,7 @@
 #define RIPPLE_OVERLAY_TRAFFIC_H_INCLUDED
 
 #include <xrpl/basics/safe_cast.h>
+#include <xrpl/beast/utility/instrumentation.h>
 #include <xrpl/protocol/messages.h>
 
 #include <array>
@@ -74,7 +75,6 @@ public:
         proposal,
         validation,
         validatorlist,
-        shards,  // shard-related traffic
 
         // TMHaveSet message:
         get_set,    // transaction sets we try to get
@@ -172,7 +172,9 @@ public:
     void
     addCount(category cat, bool inbound, int bytes)
     {
-        assert(cat <= category::unknown);
+        ASSERT(
+            cat <= category::unknown,
+            "ripple::TrafficCount::addCount : valid category input");
 
         if (inbound)
         {
@@ -208,7 +210,6 @@ protected:
         {"proposals"},          // category::proposal
         {"validations"},        // category::validation
         {"validator_lists"},    // category::validatorlist
-        {"shards"},             // category::shards
         {"set_get"},            // category::get_set
         {"set_share"},          // category::share_set
         {"ledger_data_Transaction_Set_candidate_get"},  // category::ld_tsc_get

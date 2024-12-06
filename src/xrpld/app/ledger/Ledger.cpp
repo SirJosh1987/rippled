@@ -29,18 +29,17 @@
 #include <xrpld/app/misc/HashRouter.h>
 #include <xrpld/app/misc/LoadFeeTrack.h>
 #include <xrpld/app/misc/NetworkOPs.h>
-#include <xrpld/app/rdb/backend/PostgresDatabase.h>
 #include <xrpld/app/rdb/backend/SQLiteDatabase.h>
 #include <xrpld/consensus/LedgerTiming.h>
 #include <xrpld/core/Config.h>
 #include <xrpld/core/JobQueue.h>
-#include <xrpld/core/Pg.h>
 #include <xrpld/core/SociDB.h>
 #include <xrpld/nodestore/Database.h>
 #include <xrpl/basics/Log.h>
 #include <xrpl/basics/StringUtilities.h>
 #include <xrpl/basics/contract.h>
 #include <xrpl/beast/core/LexicalCast.h>
+#include <xrpl/beast/utility/instrumentation.h>
 #include <xrpl/json/to_string.h>
 #include <xrpl/protocol/Feature.h>
 #include <xrpl/protocol/HashPrefix.h>
@@ -51,7 +50,6 @@
 #include <xrpl/protocol/digest.h>
 #include <xrpl/protocol/jss.h>
 #include <boost/optional.hpp>
-#include <cassert>
 #include <utility>
 #include <vector>
 
@@ -258,11 +256,6 @@ Ledger::Ledger(
     if (info_.txHash.isNonZero() &&
         !txMap_.fetchRoot(SHAMapHash{info_.txHash}, nullptr))
     {
-        if (config.reporting())
-        {
-            // Reporting should never have incomplete data
-            Throw<std::runtime_error>("Missing tx map root for ledger");
-        }
         loaded = false;
         JLOG(j.warn()) << "Don't have transaction root for ledger" << info_.seq;
     }
@@ -270,11 +263,6 @@ Ledger::Ledger(
     if (info_.accountHash.isNonZero() &&
         !stateMap_.fetchRoot(SHAMapHash{info_.accountHash}, nullptr))
     {
-        if (config.reporting())
-        {
-            // Reporting should never have incomplete data
-            Throw<std::runtime_error>("Missing state map root for ledger");
-        }
         loaded = false;
         JLOG(j.warn()) << "Don't have state data root for ledger" << info_.seq;
     }
@@ -289,7 +277,7 @@ Ledger::Ledger(
     if (!loaded)
     {
         info_.hash = calculateLedgerHash(info_);
-        if (acquire && !config.reporting())
+        if (acquire)
             family.missingNodeAcquireByHash(info_.hash, info_.seq);
     }
 }
@@ -381,7 +369,7 @@ Ledger::setAccepted(
     bool correctCloseTime)
 {
     // Used when we witnessed the consensus.
-    assert(!open());
+    ASSERT(!open(), "ripple::Ledger::setAccepted : valid ledger state");
 
     info_.closeTime = closeTime;
     info_.closeTimeResolution = closeResolution;
@@ -454,7 +442,7 @@ Ledger::read(Keylet const& k) const
 {
     if (k.key == beast::zero)
     {
-        assert(false);
+        UNREACHABLE("ripple::Ledger::read : zero key");
         return nullptr;
     }
     auto const& item = stateMap_.peekItem(k.key);
@@ -574,7 +562,9 @@ Ledger::rawTxInsert(
     std::shared_ptr<Serializer const> const& txn,
     std::shared_ptr<Serializer const> const& metaData)
 {
-    assert(metaData);
+    ASSERT(
+        metaData != nullptr,
+        "ripple::Ledger::rawTxInsert : non-null metadata input");
 
     // low-level - just add to table
     Serializer s(txn->getDataLength() + metaData->getDataLength() + 16);
@@ -591,7 +581,9 @@ Ledger::rawTxInsertWithHash(
     std::shared_ptr<Serializer const> const& txn,
     std::shared_ptr<Serializer const> const& metaData)
 {
-    assert(metaData);
+    ASSERT(
+        metaData != nullptr,
+        "ripple::Ledger::rawTxInsertWithHash : non-null metadata input");
 
     // low-level - just add to table
     Serializer s(txn->getDataLength() + metaData->getDataLength() + 16);
@@ -687,7 +679,9 @@ Ledger::setup()
 void
 Ledger::defaultFees(Config const& config)
 {
-    assert(fees_.base == 0 && fees_.reserve == 0 && fees_.increment == 0);
+    ASSERT(
+        fees_.base == 0 && fees_.reserve == 0 && fees_.increment == 0,
+        "ripple::Ledger::defaultFees : zero fees");
     if (fees_.base == 0)
         fees_.base = config.FEES.reference_fee;
     if (fees_.reserve == 0)
@@ -883,7 +877,7 @@ Ledger::assertSensible(beast::Journal ledgerJ) const
 
     JLOG(ledgerJ.fatal()) << "ledger is not sensible" << j;
 
-    assert(false);
+    UNREACHABLE("ripple::Ledger::assertSensible : ledger is not sensible");
 
     return false;
 }
@@ -917,7 +911,9 @@ Ledger::updateSkipList()
             created = false;
         }
 
-        assert(hashes.size() <= 256);
+        ASSERT(
+            hashes.size() <= 256,
+            "ripple::Ledger::updateSkipList : first maximum hashes size");
         hashes.push_back(info_.parentHash);
         sle->setFieldV256(sfHashes, STVector256(hashes));
         sle->setFieldU32(sfLastLedgerSequence, prevIndex);
@@ -942,7 +938,9 @@ Ledger::updateSkipList()
         hashes = static_cast<decltype(hashes)>(sle->getFieldV256(sfHashes));
         created = false;
     }
-    assert(hashes.size() <= 256);
+    ASSERT(
+        hashes.size() <= 256,
+        "ripple::Ledger::updateSkipList : second maximum hashes size");
     if (hashes.size() == 256)
         hashes.erase(hashes.begin());
     hashes.push_back(info_.parentHash);
@@ -1022,7 +1020,8 @@ pendSaveValidated(
         }
     }
 
-    assert(ledger->isImmutable());
+    ASSERT(
+        ledger->isImmutable(), "ripple::pendSaveValidated : immutable ledger");
 
     if (!app.pendingSaves().shouldWork(ledger->info().seq, isSynchronous))
     {
@@ -1099,9 +1098,10 @@ finishLoadByIndexOrHash(
     if (!ledger)
         return;
 
-    assert(
+    ASSERT(
         ledger->info().seq < XRP_LEDGER_EARLIEST_FEES ||
-        ledger->read(keylet::fees()));
+            ledger->read(keylet::fees()),
+        "ripple::finishLoadByIndexOrHash : valid ledger fees");
     ledger->setImmutable();
 
     JLOG(j.trace()) << "Loaded ledger: " << to_string(ledger->info().hash);
@@ -1140,98 +1140,12 @@ loadByHash(uint256 const& ledgerHash, Application& app, bool acquire)
     {
         std::shared_ptr<Ledger> ledger = loadLedgerHelper(*info, app, acquire);
         finishLoadByIndexOrHash(ledger, app.config(), app.journal("Ledger"));
-        assert(!ledger || ledger->info().hash == ledgerHash);
+        ASSERT(
+            !ledger || ledger->info().hash == ledgerHash,
+            "ripple::loadByHash : ledger hash match if loaded");
         return ledger;
     }
     return {};
 }
 
-std::vector<
-    std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>>
-flatFetchTransactions(Application& app, std::vector<uint256>& nodestoreHashes)
-{
-    if (!app.config().reporting())
-    {
-        assert(false);
-        Throw<std::runtime_error>(
-            "flatFetchTransactions: not running in reporting mode");
-    }
-
-    std::vector<
-        std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>>
-        txns;
-    auto start = std::chrono::system_clock::now();
-    auto nodeDb =
-        dynamic_cast<NodeStore::DatabaseNodeImp*>(&(app.getNodeStore()));
-    if (!nodeDb)
-    {
-        assert(false);
-        Throw<std::runtime_error>(
-            "Called flatFetchTransactions but database is not DatabaseNodeImp");
-    }
-    auto objs = nodeDb->fetchBatch(nodestoreHashes);
-
-    auto end = std::chrono::system_clock::now();
-    JLOG(app.journal("Ledger").debug())
-        << " Flat fetch time : " << ((end - start).count() / 1000000000.0)
-        << " number of transactions " << nodestoreHashes.size();
-    assert(objs.size() == nodestoreHashes.size());
-    for (size_t i = 0; i < objs.size(); ++i)
-    {
-        uint256& nodestoreHash = nodestoreHashes[i];
-        auto& obj = objs[i];
-        if (obj)
-        {
-            auto node = SHAMapTreeNode::makeFromPrefix(
-                makeSlice(obj->getData()), SHAMapHash{nodestoreHash});
-            if (!node)
-            {
-                assert(false);
-                Throw<std::runtime_error>(
-                    "flatFetchTransactions : Error making SHAMap node");
-            }
-            auto item = (static_cast<SHAMapLeafNode*>(node.get()))->peekItem();
-            if (!item)
-            {
-                assert(false);
-                Throw<std::runtime_error>(
-                    "flatFetchTransactions : Error reading SHAMap node");
-            }
-            auto txnPlusMeta = deserializeTxPlusMeta(*item);
-            if (!txnPlusMeta.first || !txnPlusMeta.second)
-            {
-                assert(false);
-                Throw<std::runtime_error>(
-                    "flatFetchTransactions : Error deserializing SHAMap node");
-            }
-            txns.push_back(std::move(txnPlusMeta));
-        }
-        else
-        {
-            assert(false);
-            Throw<std::runtime_error>(
-                "flatFetchTransactions : Containing SHAMap node not found");
-        }
-    }
-    return txns;
-}
-std::vector<
-    std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>>
-flatFetchTransactions(ReadView const& ledger, Application& app)
-{
-    if (!app.config().reporting())
-    {
-        assert(false);
-        return {};
-    }
-
-    auto const db =
-        dynamic_cast<PostgresDatabase*>(&app.getRelationalDatabase());
-    if (!db)
-        Throw<std::runtime_error>("Failed to get relational database");
-
-    auto nodestoreHashes = db->getTxHashes(ledger.info().seq);
-
-    return flatFetchTransactions(app, nodestoreHashes);
-}
 }  // namespace ripple

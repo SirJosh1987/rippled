@@ -192,8 +192,7 @@ SHAMap::gmn_ProcessNodes(MissingNodes& mn, MissingNodes::StackEntry& se)
         }
         else if (
             !backed_ ||
-            !f_.getFullBelowCache(ledgerSeq_)
-                 ->touch_if_exists(childHash.as_uint256()))
+            !f_.getFullBelowCache()->touch_if_exists(childHash.as_uint256()))
         {
             bool pending = false;
             auto d = descendAsync(
@@ -251,8 +250,7 @@ SHAMap::gmn_ProcessNodes(MissingNodes& mn, MissingNodes::StackEntry& se)
         node->setFullBelowGen(mn.generation_);
         if (backed_)
         {
-            f_.getFullBelowCache(ledgerSeq_)
-                ->insert(node->getHash().as_uint256());
+            f_.getFullBelowCache()->insert(node->getHash().as_uint256());
         }
     }
 
@@ -316,14 +314,16 @@ SHAMap::gmn_ProcessDeferredReads(MissingNodes& mn)
 std::vector<std::pair<SHAMapNodeID, uint256>>
 SHAMap::getMissingNodes(int max, SHAMapSyncFilter* filter)
 {
-    assert(root_->getHash().isNonZero());
-    assert(max > 0);
+    ASSERT(
+        root_->getHash().isNonZero(),
+        "ripple::SHAMap::getMissingNodes : nonzero root hash");
+    ASSERT(max > 0, "ripple::SHAMap::getMissingNodes : valid max input");
 
     MissingNodes mn(
         max,
         filter,
         512,  // number of async reads per pass
-        f_.getFullBelowCache(ledgerSeq_)->getGeneration());
+        f_.getFullBelowCache()->getGeneration());
 
     if (!root_->isInner() ||
         std::static_pointer_cast<SHAMapInnerNode>(root_)->isFullBelow(
@@ -376,7 +376,9 @@ SHAMap::getMissingNodes(int max, SHAMapSyncFilter* filter)
                     // This is a node we are continuing to process
                     fullBelow = fullBelow && was;  // was and still is
                 }
-                assert(node);
+                ASSERT(
+                    node != nullptr,
+                    "ripple::SHAMap::getMissingNodes : first non-null node");
             }
         }
 
@@ -407,7 +409,9 @@ SHAMap::getMissingNodes(int max, SHAMapSyncFilter* filter)
                 // Resume at the top of the stack
                 pos = mn.stack_.top();
                 mn.stack_.pop();
-                assert(node != nullptr);
+                ASSERT(
+                    node != nullptr,
+                    "ripple::SHAMap::getMissingNodes : second non-null node");
             }
         }
 
@@ -534,11 +538,13 @@ SHAMap::addRootNode(
     if (root_->getHash().isNonZero())
     {
         JLOG(journal_.trace()) << "got root node, already have one";
-        assert(root_->getHash() == hash);
+        ASSERT(
+            root_->getHash() == hash,
+            "ripple::SHAMap::addRootNode : valid hash input");
         return SHAMapAddNode::duplicate();
     }
 
-    assert(cowid_ >= 1);
+    ASSERT(cowid_ >= 1, "ripple::SHAMap::addRootNode : valid cowid");
     auto node = SHAMapTreeNode::makeFromWire(rootNode);
     if (!node || node->getHash() != hash)
         return SHAMapAddNode::invalid();
@@ -572,7 +578,7 @@ SHAMap::addKnownNode(
     Slice const& rawNode,
     SHAMapSyncFilter* filter)
 {
-    assert(!node.isRoot());
+    ASSERT(!node.isRoot(), "ripple::SHAMap::addKnownNode : valid node input");
 
     if (!isSynching())
     {
@@ -580,7 +586,7 @@ SHAMap::addKnownNode(
         return SHAMapAddNode::duplicate();
     }
 
-    auto const generation = f_.getFullBelowCache(ledgerSeq_)->getGeneration();
+    auto const generation = f_.getFullBelowCache()->getGeneration();
     SHAMapNodeID iNodeID;
     auto iNode = root_.get();
 
@@ -589,7 +595,7 @@ SHAMap::addKnownNode(
            (iNodeID.getDepth() < node.getDepth()))
     {
         int branch = selectBranch(iNodeID, node.getNodeID());
-        assert(branch >= 0);
+        ASSERT(branch >= 0, "ripple::SHAMap::addKnownNode : valid branch");
         auto inner = static_cast<SHAMapInnerNode*>(iNode);
         if (inner->isEmptyBranch(branch))
         {
@@ -598,8 +604,7 @@ SHAMap::addKnownNode(
         }
 
         auto childHash = inner->getChildHash(branch);
-        if (f_.getFullBelowCache(ledgerSeq_)
-                ->touch_if_exists(childHash.as_uint256()))
+        if (f_.getFullBelowCache()->touch_if_exists(childHash.as_uint256()))
         {
             return SHAMapAddNode::duplicate();
         }
